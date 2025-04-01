@@ -19,7 +19,10 @@ import utils
 from model import RepNet6D
 from hdssd import Head_detection
 
-
+import os
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), "..",))
+from inference.head import HeadFaceModel
 
 def parse_args():
     """Parse input arguments."""
@@ -58,7 +61,7 @@ if __name__ == '__main__':
         device = torch.device('cpu')
     else:
         device = torch.device('cuda:%d' % gpu)
-    
+    print("\n\ndevice: ", device, "\n\n")
     transformations = transforms.Compose([transforms.Resize(224),
                                       transforms.CenterCrop(224),
                                       transforms.ToTensor(),
@@ -94,7 +97,7 @@ if __name__ == '__main__':
         )
         fourcc = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
         out = cv2.VideoWriter(
-            f"{args.output}/{video_path.split('/')[-1].split('.')[0]}.avi",
+            f"{args.output}/{video_path.split('/')[-1].split('.')[0]}_predict.avi",
             fourcc,
             fps,
             (w, h),
@@ -106,8 +109,10 @@ if __name__ == '__main__':
                 break
             
             (h, w, c) = frame.shape
+            t0 = time.time()
             frame, heads = Head_detection.run(frame, w, h)
-            
+            t1 = time.time()
+
             for head in heads:
                 x_min, y_min = int(head['left']), int(head['top'])
                 x_max, y_max = int(head['right']), int(head['bottom'])
@@ -126,16 +131,30 @@ if __name__ == '__main__':
                 img = torch.Tensor(img[None, :]).to(device)
                 
                 # start = time.time()
+                t2 = time.time()
                 R_pred = model(img) # model HPE predict
+                t3 = time.time()
+  
                 # end = time.time()
                 # print('Head pose estimation: %2f ms' % ((end - start)*1000.))
+                
                 euler = utils.compute_euler_angles_from_rotation_matrices(
                     R_pred)*180/np.pi
+                
                 p_pred_deg = euler[:, 0].detach().cpu()
                 y_pred_deg = euler[:, 1].detach().cpu()
                 r_pred_deg = euler[:, 2].detach().cpu()
+                
                 utils.draw_axis(frame, y_pred_deg[0], p_pred_deg[0], r_pred_deg[0], x_min + int(.5*(
                     x_max-x_min)), y_min + int(.5*(y_max-y_min)), size=bbox_width)
+                
+                pitch = p_pred_deg[0] * np.pi / 180
+                yaw = -(y_pred_deg[0] * np.pi / 180)
+                roll = r_pred_deg[0] * np.pi / 180
+                label = "{}: {:.2f}, {}: {:.2f}, {}: {:.2f} ".format('x', pitch, 'y',yaw,'z', roll)
+                y = y_min - 5 if y_min - 5 > 5 else y_min + 5
+                cv2.putText(frame, label, (x_min, y), cv2.FONT_HERSHEY_SIMPLEX, 1, [0, 0, 255], 2)
+            t4 = time.time()
             out.write(frame)
             
         cap.release()
